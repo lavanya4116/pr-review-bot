@@ -7,7 +7,7 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # Groq model to use — llama3 is fast and free
-GROQ_MODEL = "llama3-70b-8192"
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 def validate_config():
     """Fail fast with clear error if env vars are missing"""
