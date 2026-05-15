@@ -148,6 +148,81 @@ class GitHubClient:
 
         return "\n".join(parts)
 
+    def post_review(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        body: str,
+        event: str = "COMMENT"
+    ) -> dict:
+        """
+        Post a formal PR review.
+        event options:
+          COMMENT         → just a comment, no approval decision
+          APPROVE         → approves the PR
+          REQUEST_CHANGES → requests changes before merge
+        """
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+
+        payload = {
+            "body": body,
+            "event": event
+        }
+
+        response = self.session.post(url, json=payload)
+
+        if response.status_code == 422:
+            raise ValueError(
+                "❌ Cannot post review — you may be trying to review "
+                "your own PR. GitHub doesn't allow self-reviews.\n"
+                "Try posting as an issue comment instead with --comment flag."
+            )
+
+        response.raise_for_status()
+        return response.json()
+
+    def post_issue_comment(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        body: str
+    ) -> dict:
+        """
+        Post a regular comment on a PR (via issues API).
+        Works even on your own PRs — good fallback.
+        """
+        # PRs and issues share the same comment API in GitHub
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{pr_number}/comments"
+
+        payload = {"body": body}
+
+        response = self.session.post(url, json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def get_existing_bot_comments(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int
+    ) -> list:
+        """
+        Check if bot has already commented on this PR.
+        Avoids spamming duplicate reviews.
+        """
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{pr_number}/comments"
+        comments = self._get(url)
+
+        # Filter comments that look like they're from our bot
+        bot_comments = [
+            c for c in comments
+            if "🤖 Automated PR Review" in c.get("body", "")
+        ]
+
+        return bot_comments
+    
     @staticmethod
     def parse_repo(repo_string: str) -> tuple[str, str]:
         """
