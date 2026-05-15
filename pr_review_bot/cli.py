@@ -113,7 +113,13 @@ def main():
     default=False,
     help="Show the full diff being sent to the LLM"
 )
-def review(repo, pr, post, comment, force, verbose):
+@click.option(
+    "--save",
+    type=click.Path(),
+    default=None,
+    help="Save review to a file e.g. --save review.md"
+)
+def review(repo, pr, post, comment, force, verbose,save):
     """Review a GitHub Pull Request with AI"""
 
     print_banner()
@@ -258,7 +264,15 @@ def review(repo, pr, post, comment, force, verbose):
         console.print(
             "[dim]💡 Tip: Add --post --comment to post on your own PRs[/dim]"
         )
-
+    # Save to file if --save flag
+    if save:
+        try:
+            with open(save, "w") as f:
+                f.write(f"# PR Review — #{pr_info.number}: {pr_info.title}\n\n")
+                f.write(review_text)
+            console.print(f"[green]💾 Review saved to {save}[/green]")
+        except IOError as e:
+            console.print(f"[red]❌ Could not save file: {e}[/red]")
 @main.command()
 def config():
     """Check your configuration and API keys"""
@@ -302,7 +316,61 @@ def config():
             console.print(
                 "[red]❌ GitHub connection: Could not connect[/red]"
             )
+@main.command()
+@click.option("--repo", "-r", required=True, help="GitHub repo e.g. 'owner/repo'")
+@click.option("--pr", "-p", required=True, type=int, help="PR number")
+def stats(repo, pr):
+    """Show PR stats without running a review"""
 
+    try:
+        validate_config()
+    except EnvironmentError as e:
+        console.print(f"[red]{e}[/red]")
+        raise click.Abort()
+
+    client = GitHubClient()
+
+    try:
+        owner, repo_name = client.parse_repo(repo)
+        pr_info = client.get_pr_info(owner, repo_name, pr)
+    except Exception as e:
+        console.print(f"[red]{e}[/red]")
+        raise click.Abort()
+
+    reviewer = PRReviewer()
+    usage = reviewer.get_usage_stats(pr_info)
+
+    table = Table(
+        title=f"PR #{pr} Stats",
+        show_header=True,
+        header_style="bold cyan"
+    )
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="white")
+
+    # PR state with color
+    state_colors = {
+        "open": "[green]open[/green]",
+        "closed": "[red]closed[/red]",
+        "merged": "[purple]merged[/purple]"
+    }
+    state_display = state_colors.get(pr_info.state, pr_info.state)
+
+    table.add_row("Title", pr_info.title)
+    table.add_row("Author", f"@{pr_info.author}")
+    table.add_row("State", state_display)
+    table.add_row("Files Changed", str(usage["files"]))
+    table.add_row("Reviewable Files", str(usage["reviewable_files"]))
+    table.add_row("Total Additions", f"[green]+{pr_info.total_additions}[/green]")
+    table.add_row("Total Deletions", f"[red]-{pr_info.total_deletions}[/red]")
+    table.add_row("Est. Input Tokens", str(usage["estimated_input_tokens"]))
+    table.add_row(
+        "Within Context Window",
+        "[green]Yes[/green]" if usage["estimated_input_tokens"] < 7000
+        else "[yellow]Will be truncated[/yellow]"
+    )
+
+    console.print(table)
 
 if __name__ == "__main__":
     main()

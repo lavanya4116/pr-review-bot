@@ -1,8 +1,10 @@
+import time
 from groq import Groq
+from groq import APITimeoutError, APIConnectionError, RateLimitError
 from pr_review_bot.config import GROQ_API_KEY, GROQ_MODEL
 from pr_review_bot.github_client import PRInfo, GitHubClient
+from pr_review_bot.exceptions import LLMError, LLMTimeoutError
 
-# System prompt — this shapes the entire review quality
 SYSTEM_PROMPT = """You are a senior software engineer with 10+ years of experience 
 doing thorough, constructive code reviews. You have deep expertise in:
 - Security vulnerabilities and best practices
@@ -21,11 +23,6 @@ Format your review in clean markdown."""
 
 
 def build_review_prompt(pr_info: PRInfo, diff: str) -> str:
-    """
-    Build the user prompt for the LLM.
-    Good prompt structure = good review output.
-    """
-    # Count reviewable files
     reviewable = [f for f in pr_info.files if f.patch]
 
     prompt = f"""Please review this Pull Request:
@@ -75,47 +72,83 @@ class PRReviewer:
         self.client = Groq(api_key=GROQ_API_KEY)
         self.github = GitHubClient()
 
-    def review_pr(self, pr_info: PRInfo) -> str:
+    def review_pr(self, pr_info: PRInfo, max_retries: int = 2) -> str:
         """
         Send PR diff to Groq Llama 3 and get back a structured review.
-        Returns the review text.
+        Retries on transient failures.
         """
-        # Format the diff for the LLM
         diff = self.github.format_diff_for_review(pr_info)
 
-        # Truncate if too long — Llama 3 has 8192 token context window
-        # ~4 chars per token, so 6000 tokens ≈ 24000 chars — safe limit
+        # Truncate if too long
         MAX_DIFF_CHARS = 24000
+        truncated = False
         if len(diff) > MAX_DIFF_CHARS:
             diff = diff[:MAX_DIFF_CHARS]
             diff += "\n\n[... diff truncated — showing first 24000 chars ...]"
+            truncated = True
 
-        # Build the prompt
         prompt = build_review_prompt(pr_info, diff)
 
-        # Call Groq API
-        response = self.client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,      # lower = more consistent, focused output
-            max_tokens=2048,      # enough for a thorough review
-        )
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    model=GROQ_MODEL,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=2048,
+                    timeout=30      # 30 second timeout
+                )
 
-        review_text = response.choices[0].message.content
-        return review_text
+                review_text = response.choices[0].message.content
+
+                # Add truncation notice if diff was cut
+                if truncated:
+                    review_text += (
+                        "\n\n---\n"
+                        "⚠️ *Note: PR diff was truncated due to size. "
+                        "Review covers the first 24,000 characters of changes.*"
+                    )
+
+                return review_text
+
+            except APITimeoutError:
+                last_error = LLMTimeoutError(
+                    "❌ Groq API timed out after 30 seconds.\n"
+                    "Try again — Groq is usually fast but occasionally slow."
+                )
+                if attempt < max_retries:
+                    time.sleep(2)
+                    continue
+
+            except RateLimitError:
+                raise LLMError(
+                    "❌ Groq API rate limit exceeded.\n"
+                    "Wait a minute and try again. "
+                    "Free tier allows ~30 requests/minute."
+                )
+
+            except APIConnectionError:
+                last_error = LLMError(
+                    "❌ Cannot connect to Groq API.\n"
+                    "Check your internet connection."
+                )
+                if attempt < max_retries:
+                    time.sleep(2)
+                    continue
+
+            except Exception as e:
+                raise LLMError(f"❌ Unexpected LLM error: {str(e)}")
+
+        raise last_error
 
     def get_usage_stats(self, pr_info: PRInfo) -> dict:
-        """
-        Estimate token usage before making the API call.
-        Useful for large PRs.
-        """
         diff = self.github.format_diff_for_review(pr_info)
         prompt = build_review_prompt(pr_info, diff)
 
-        # Rough estimate: 1 token ≈ 4 characters
         estimated_tokens = len(prompt) // 4
 
         return {
