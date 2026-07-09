@@ -10,6 +10,7 @@ from pr_review_bot.config import validate_config
 from pr_review_bot.github_client import GitHubClient
 from pr_review_bot.reviewer import PRReviewer
 from rich.markdown import Markdown
+from pr_review_bot.exceptions import GitHubError
 
 console = Console()
 
@@ -248,7 +249,7 @@ def review(repo, pr, post, comment, force, verbose,save):
                 f"/{repo_name}/pull/{pr}[/dim]"
             )
 
-        except ValueError as e:
+        except GitHubError as e:
             # Self-review error — suggest --comment flag
             console.print(f"[red]{e}[/red]")
             console.print(

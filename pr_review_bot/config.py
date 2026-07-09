@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from pr_review_bot.exceptions import ConfigError
 
 load_dotenv()
 
@@ -19,7 +20,7 @@ def validate_config():
         missing.append("GROQ_API_KEY")
 
     if missing:
-        raise EnvironmentError(
+        raise ConfigError(
             f"\n❌ Missing required environment variables: {', '.join(missing)}\n"
             f"👉 Copy .env.example to .env and fill in your values.\n"
         )
