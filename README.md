@@ -99,6 +99,12 @@ review-bot review --repo owner/repo --pr 42 --save review.md
 
 # Show full diff being sent to LLM
 review-bot review --repo owner/repo --pr 42 --verbose
+
+# Show PR statistics without running AI review
+review-bot stats --repo owner/repo --pr 42
+
+# Verify GitHub and Groq configuration
+review-bot config
 ```
 
 ### Other Commands
